@@ -28,27 +28,27 @@ for (yr in allYears) {
     allDays <- paste(dataPath, yr, sep = '/') %>% dir()
 
     for (tday in allDays) {
-        # print(sprintf("## %s :==> @%s", tday, Sys.time()))
 
         allFiles <- tday %>% 
             paste(dataPath, yr, ., sep = '/') %>% 
             list.files(., pattern = '\\.csv$', full.names = TRUE)
 
         destfile <- sprintf("%s/%s/%s.fst", savePath, yr, tday)
+        
         # if (file.exists(destfile)) {
         #     print(sprintf("## %s file exited :==> @%s", tday, Sys.time()))
         #     next
         # }
 
         if (length(allFiles) == 0) {
-            res <- data.table()
+            res <- data.table(证券代码 = NA)
         } else {
             res <- lapply(allFiles, function(f){
                 # print(f)
                 res <- readSinaTick(f) %>% 
                     .[, ":="(证券代码 = gsub('.*([0-9]{6})\\.csv$', '\\1', f)
                      )]
-            }) %>% rbindlist()
+            }) %>% rbindlist(., fill = TRUE)
             setcolorder(res, c('证券代码',
                                colnames(res)[1:(ncol(res)-1)])
                         )
