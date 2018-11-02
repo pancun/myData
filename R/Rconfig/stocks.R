@@ -23,12 +23,33 @@ readSinaTick <- function(datafile) {
 
 
 ## =============================================================================
+transform_wind_code <- function(stockID) {
+    if (substr(stockID, 1, 1) == '6') {
+        res <- paste0(stockID, ".SH")
+    } else {
+        res <- paste0(stockID, ".SZ")
+    }
+    return(res)
+}
+
+transform_sina_code <- function(stockID) {
+    if (substr(stockID, 1, 1) == '6') {
+        res <- "sh"
+    } else {
+        res <- "sz"
+    }
+    return(paste0(res, stockID))
+}
+## =============================================================================
+
+
+## =============================================================================
 ## 清理股票名称
 ## 把原来等宽的中文字体换成 utf8
 ## ------------------------
 cleanStockName <- function(stockName) {
- res <- gsub(' ', '', stockName) %>% 
-        gsub('Ａ', 'A', .) %>% 
+ res <- gsub(' ', '', stockName) %>%
+        gsub('Ａ', 'A', .) %>%
         gsub("Ｂ", "B", .)
 }
 ## =============================================================================
@@ -108,7 +129,7 @@ fetch_sse_listing <- function() {
                )]
 
     ## B股如果没有，则表示为 NA
-    dt[stockName_B == '-', 
+    dt[stockName_B == '-',
         ":="(stockID_B = NA,
              stockName_B = NA
             )
@@ -126,9 +147,9 @@ fetch_sse_listing <- function() {
     return(dt)
 }
 
-## 
+##
 url_szse_listing_A <- "http://www.szse.cn/szseWeb/ShowReport.szse?SHOWTYPE=xlsx&CATALOGID=1110&tab2PAGENO=1&ENCODE=1&TABKEY=tab2"
-## 
+##
 url_szse_listing_B <- "http://www.szse.cn/szseWeb/ShowReport.szse?SHOWTYPE=xlsx&CATALOGID=1110&tab3PAGENO=1&ENCODE=1&TABKEY=tab3"
 
 fetch_szse_listing <- function() {
@@ -145,7 +166,7 @@ fetch_szse_listing <- function() {
         # print(tryNo)
         tryNo <- tryNo + 1
         if (class(try(
-            GET(url_szse_listing_A, 
+            GET(url_szse_listing_A,
                 write_disk(fa, overwrite = TRUE),
                 timeout(60))
           , silent = T)) != 'try-error') break
@@ -168,7 +189,7 @@ fetch_szse_listing <- function() {
         # print(tryNo)
         tryNo <- tryNo + 1
         if (class(try(
-            GET(url_szse_listing_B, 
+            GET(url_szse_listing_B,
                 write_disk(fb, overwrite = TRUE),
                 timeout(60))
           , silent = T)) != 'try-error') break
@@ -196,5 +217,155 @@ fetch_szse_listing <- function() {
 ## =============================================================================
 
 
+## =============================================================================
+## 从新浪下载股票成交明细数据
+## --------------------------
+HEADERS_SINA_MARKET <- c(
+    "Accept" = "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Encoding" = "gzip, deflate",
+    "Accept-Language" = "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7,zh-TW;q=0.6",
+    "Connection" = "keep-alive",
+    "DNT" = "1",
+    "Host" = "market.finance.sina.com.cn",
+    "Upgrade-Insecure-Requests" = "1",
+    "User-Agent" = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.84 Safari/537.36"
+)
+URL_SINA_MARKET <- "http://market.finance.sina.com.cn/transHis.php"
 
+fetchPageTransaction <- function(stockID, tradingDay, page, ip) {
+    # stockID <- 'sz000001'
+    # tradingDay <- '2018-10-12'
+
+    tday <- ymd(tradingDay)
+
+    q <- list(
+        symbol = stockID,
+        date   = tday,
+        page   = as.character(page))
+
+    if (class(try(
+        r <- GET(URL_SINA_MARKET
+                 ,query = q
+                 ,add_headers(HEADERS_SINA_MARKET)
+                 ,timeout(10)
+                 ,use_proxy(ip[1, ip], ip[1, as.numeric(port)])
+        )
+        ,silent = T
+    )
+    ) == 'try-error') {
+        return(data.table())
+    }
+
+    ## 如果链接错误
+    if (r$status_code != 200 |
+        is.na(content(r, as = 'text', encoding = 'GB18030'))) {
+        return(NA)
+    } else {
+        if (is.null(r$header$server)) {
+            return(data.table())
+        } else if (r$headers$server != 'Sina') {
+            return(data.table())
+        }
+    }
+
+    # Sys.sleep(.1)
+
+    p <- content(r, 'parsed', encoding = 'GB18030')
+
+    res <- p %>%
+        html_nodes('table') %>%
+        html_table() %>%
+        rbindlist()
+
+    ## 如果数据为空
+    ## 说明有错误
+    if (nrow(res) == 0) {
+        return(data.table())
+    }
+
+    return(res)
+}
+
+fetchStockTransaction <- function(stockID, tradingDay) {
+    # stockID <- 'sz000001'
+    # tradingDay <- '2018-10-12'
+
+    finalData <- FALSE
+
+    dt <- list()
+
+    for (i in 1:50) {
+        print(i)
+
+        finalTryNo <- 50
+        for (j in 1:finalTryNo) {
+            res <- fetchPageTransaction(stockID, tradingDay, i, ip)
+
+            ## 如果是 NA
+            ## 说明 IP 不能用了
+            if (any(is.na(res))) {
+                tmp <- ip[1, ip]
+
+                ipTables[ip == tmp, tryNo := tryNo + 1]
+                ipTables <- ipTables[tryNo < 500]
+
+                if (nrow(ipTables) < 5) {
+                    ipTables <- fetchIP(10, core = 4)
+                }
+
+                ip <- ipTables[ip != tmp] %>% .[sample(1:.N,1)]
+                next
+            }
+
+            ## 如果是正常的数据
+            ## 就说明获得了正确的数据
+            ## 然后退出这个循环
+            if (nrow(res) != 0) {
+                dt[[i]] <- res
+                break
+            }
+
+            ## ------------------------------
+            if (j == finalTryNo) {
+                if (is.null(nrow(res)) | nrow(res) == 0) {
+                    dt[[i]] <- NA
+                }
+            }
+            ## ------------------------------
+        }
+
+        if (is.na(dt[[i]])) return(data.table())
+
+        ## 最后一行
+        if (nrow(dt[[i]]) == 1) {
+            finalData <- TRUE
+            break
+        }
+
+    }
+
+    if (finalData) {
+        dt <- rbindlist(dt) %>%
+            .[!duplicated(.)]
+    } else {
+        dt <- data.table()
+    }
+
+    return(dt)
+}
+
+## =============================================================================
+if (F) {
+    source("~/myData/R/Rconfig/ip.R")
+    ipTables <- fetchIP(10)
+    ip <- ipTables[1]
+
+    dt <- fetchStockTransaction('sz000002', '2018-10-11')
+    print(dt)
+
+    dt <- fetchStockTransaction('sz000005', '2016-01-04')
+    print(dt)
+}
+
+## =============================================================================
 
