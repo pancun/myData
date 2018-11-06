@@ -218,6 +218,176 @@ fetch_szse_listing <- function() {
 
 
 ## =============================================================================
+## 从上交所、深交所下载股票停复牌公告数据
+##
+## - fetch_sse_suspension：上交所：[披露 -> 交易提示 -> 停复牌信息](http://www.sse.com.cn/disclosure/dealinstruc/suspension/)
+## - fetch_szse_suspension：深交所：[信息披露 -> 交易备忘](http://www.szse.cn/disclosure/memo/index.html)
+## ----------------------------------
+
+url_sse_suspension <- "http://query.sse.com.cn/infodisplay/querySpecialTipsInfoByPage.do"
+headers_sse_suspension <- c(
+    "Accept"          = "*/*",
+    "Accept-Encoding" = "gzip, deflate",
+    "Accept-Language" = "zh-CN,en-US;q=0.8,zh;q=0.6,en;q=0.4,zh-TW;q=0.2",
+    "Connection"      = "keep-alive",
+    "DNT"             = "1",
+    "Host"            = "query.sse.com.cn",
+    "Referer"         = "http://www.sse.com.cn/assortment/stock/list/share/",
+    "User-Agent"      = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/60.0.3112.113 Safari/537.36"
+    )
+query_sse_suspension <- list(
+    isPagination       = "true"
+    ,searchDate         = "2018-11-05"
+    ,bgFlag             = "1"
+    ,searchDo           = "1"
+    ## ----------------------
+    # ,pageHelp.cacheSize = "1"
+    # ,pageHelp.beginPage = "1"
+    ,pageHelp.pageSize  = "10000" ## 最大到 5000
+    # ,pageHelp.pageNo    = "1"
+    # ,pageHelp.endPage   = "5"
+    )
+
+fetch_sse_suspension <- function (tdate) {
+    query_sse_suspension$searchDate <- ymd(tdate)
+
+    tryNo <- 0
+    while (tryNo < 10) {
+        tryNo <- tryNo + 1
+
+        if (class(try(
+                r <- GET(url_sse_suspension, query = query_sse_suspension,
+                       add_headers(headers_sse_suspension),
+                       timeout(60))
+                , silent = TRUE)) == 'try-error') {
+            res <- data.table()
+            next
+        }
+
+        if (tryNo == 30) {
+            res <- data.table()
+            break
+        }
+
+        p <- content(r, 'parsed')
+
+        ## ---------------------------------------------------------------------
+        if (length(p$pageHelp$data) == 0) {
+            res <- data.table(
+                stockID = NA, stockName = NA,
+                suspensionStart = NA, suspensionStop = NA,
+                suspensionTime = NA, suspensionReason = NA)
+        } else {
+            res <- lapply(1:length(p$pageHelp$data), function(i){
+                data.table(t(p$pageHelp$data[[i]]))
+            }) %>% rbindlist() %>%
+                .[, .(stockID = productCode, stockName = productName,
+                    suspensionStart = showDate, suspensionStop = stopDate,
+                    suspensionTime = stopTime, suspensionReason = stopReason)
+                ]
+            ## 防止出现 NULL 的情况
+            cols <- colnames(res)
+            res[, (cols) := lapply(.SD, as.character), .SDcols = cols]
+        }
+        ## ---------------------------------------------------------------------
+        break
+    }
+
+    return(res)
+}
+# tdate <- '2018-11-01'
+# tmp.test <- fetch_sse_suspension(tdate)
+
+
+url_szse_suspension <- "http://www.szse.cn/api/report/ShowReport/data"
+headers_szse_suspension <- c(
+    'Accept' = 'application/json, text/javascript, */*; q=0.01'
+    ,'Accept-Encoding' = 'gzip, deflate'
+    ,'Accept-Language' = 'zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7,zh-TW;q=0.6'
+    ,'Connection' = 'keep-alive'
+    ,'Content-Type' = 'application/json'
+    ,'DNT' = '1'
+    ,'Host' = 'www.szse.cn'
+    ,'Referer' = 'http://www.szse.cn/disclosure/memo/index.html'
+    ,'User-Agent' = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.84 Safari/537.36'
+    ,'X-Request-Type' = 'ajax'
+    ,'X-Requested-With' = 'XMLHttpRequest'
+    )
+
+query_szse_suspension <- list(
+    'SHOWTYPE' = 'JSON'
+    ,'CATALOGID' = '1798'
+    ,'TABKEY' = 'tab1'
+    ,'txtKsrq' = '2007-01-01'
+    ,'txtZzrq' = format(Sys.Date(), '%Y-%m-%d')
+    ,'txtKsrq-txtZzrq' = format(Sys.Date(), '%Y-%m-%d')
+    )
+
+fetch_szse_suspension <- function (fromDate = '2007-01-01', toDate = format(Sys.Date(), '%Y-%m-%d')) {
+    ## 第一步，先获取一共有多少页数据 ==> allPages
+    query_szse_suspension$txtKsrq <- fromDate
+    query_szse_suspension$txtZzrq <- toDate
+
+    if (class(try(
+            r <- GET(url_szse_suspension,
+                     query = query_szse_suspension,
+                     add_headers(headers_szse_suspension),
+                     timeout(30))
+                  , silent = TRUE)) == 'try-error') return(data.table())
+
+    allPages <- content(r, 'parsed') %>% .[[1]] %>%
+        .$metadata %>%
+        .$pagecount %>%
+        as.numeric()
+
+    dt <- list()
+
+    for (i in 1:allPages) {
+        print(sprintf("## %s :==> @%s", i, Sys.time()))
+
+        query_szse_suspension$PAGENO <- i
+
+        tryNo <- 0
+        while (tryNo <= 30) {
+            if (tryNo == 30) {
+                return(data.table())
+            }
+            tryNo <- tryNo + 1
+
+            if (class(try(
+                    r <- GET(url_szse_suspension,
+                            query = query_szse_suspension,
+                            add_headers(headers_szse_suspension),
+                            timeout(20))
+                        ,silent = TRUE)) == 'try-error') {
+                res <- data.table()
+                next
+            }
+
+            p <- content(r, 'parsed', encoding = 'GB18030')
+            d <- p[[1]]$data
+            res <- lapply(d, as.data.table) %>% rbindlist()
+            ## ------------------
+            if (nrow(res) != 0) {
+                res[, zqjc := gsub('&nbsp;', '', zqjc)]
+                dt[[i]] <- res
+                break
+            }
+            ## ------------------
+        }
+
+    }
+
+    return(rbindlist(dt))
+}
+
+# fromDate <- Sys.Date() - 15
+# tmp.test <- fetch_szse_suspension(fromDate)
+## =============================================================================
+
+
+
+## =============================================================================
 ## 从新浪下载股票成交明细数据
 ## --------------------------
 HEADERS_SINA_MARKET <- c(
@@ -357,7 +527,7 @@ fetchStockTransaction <- function(stockID, tradingDay) {
 ## =============================================================================
 if (F) {
     source("~/myData/R/Rconfig/ip.R")
-    ipTables <- fetchIP(10)
+    ipTables <- fetchIP(1)
     ip <- ipTables[1]
 
     dt <- fetchStockTransaction('sz000002', '2018-10-11')
