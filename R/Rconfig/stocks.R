@@ -19,6 +19,19 @@ readSinaTick <- function(datafile) {
 
     return(res)
 }
+
+readTick <- function(datafile, encoding = NA) {
+    ## 如果是需要转化
+    if (!is.na(encoding)) {
+        tmp <- readRcpp(datafile) %>% iconv(., from = encoding, to = 'utf8')
+        if (is.na(tmp)) return(data.table())
+        datafile <- tmp
+    }
+
+    ## 读取数据
+    res <- data.table::fread(datafile, fill = TRUE, showProgress=TRUE)
+    # return(res)
+}
 ## =============================================================================
 
 
