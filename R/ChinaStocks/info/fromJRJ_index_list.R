@@ -86,10 +86,12 @@ fetchIndex <- function(url, exchID) {
 
 ## =============================================================================
 url <- "http://summary.jrj.com.cn/zslbsh.shtml"
-sh <- fetchIndex(url, exchID = 'sh')
+exchID <- 'sh'
+sh <- fetchIndex(url, exchID)
 
 url <- "http://summary.jrj.com.cn/zslbsz.shtml"
-sz <- fetchIndex(url, exchID = 'sz')
+exchID <- 'sz'
+sz <- fetchIndex(url, exchID)
 
 dt <- list(sh, sz) %>% rbindlist()
 mysql <- mysqlFetch('china_stocks_info')
